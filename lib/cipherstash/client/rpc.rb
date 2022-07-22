@@ -296,7 +296,7 @@ module CipherStash
         raise Error::RecordDeleteFailure, "Error while deleting record from collection '#{collection.name}': #{ex.message} (#{ex.class})"
       end
 
-      def query(collection, q)
+      def query(collection, q, result_filter)
         res = @metrics.measure_rpc_call("query") do
           stub.query(Queries::QueryRequest.new(collectionId: blob_from_uuid(collection.id), query: q, schemaVersion: collection.last_active_schema_version), metadata: rpc_headers)
         end
@@ -307,7 +307,18 @@ module CipherStash
 
         raise_if_error(res)
 
-        Collection::QueryResult.new(res.records.map { |r| decrypt_record(r, "query") }, res.aggregates)
+        decrypted_records = res.records.map { |r| decrypt_record(r, "query") }
+        filtered_records = result_filter.filter(decrypted_records)
+
+        # TODO: how to deal with aggregates? Result filter could take aggregates and update appropriately as well, but
+        # this could get complex depending on what aggregates we support in the future.
+        # Ignore for now.
+
+        # TODO: handle fetching more records based on limit
+        # TODO: handle fetching more records than original limit
+        # TODO: instrumentation for false positives
+
+        Collection::QueryResult.new(filtered_records, res.aggregates)
       rescue ::GRPC::NotFound
         raise Error::DocumentQueryFailure, "Collection '#{collection.name}' not found"
       rescue ::GRPC::BadStatus => ex
@@ -328,6 +339,7 @@ module CipherStash
                   end
       end
 
+      # stumped on how to handle this in tests at the moment.
       def rpc_headers
         { authorization: "Bearer #{@profile.with_access_token[:access_token]}" }
       end
@@ -434,6 +446,6 @@ module CipherStash
       end
     end
 
-    private_constant :RPC
+    # private_constant :RPC
   end
 end
